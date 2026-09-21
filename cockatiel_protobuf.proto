@@ -1,0 +1,491 @@
+syntax = "proto3";
+package cockatiel_protobuf.v1;
+
+// ==========================================
+// ENUMS (Strict type safety instead of strings)
+// ==========================================
+
+enum ProcessPosition {
+  PROCESS_POSITION_UNSPECIFIED = 0;
+  PROCESS_POSITION_PREPROCESS = 1;
+  PROCESS_POSITION_INPROCESS = 2;
+  PROCESS_POSITION_POSTPROCESS = 3;
+  PROCESS_POSITION_CONNECTION = 4;
+}
+
+enum FlagLimitType {
+  FLAG_LIMIT_TYPE_UNSPECIFIED = 0;
+  FLAG_LIMIT_TYPE_ANY = 1;
+  FLAG_LIMIT_TYPE_OPTIONS = 2;
+  FLAG_LIMIT_TYPE_RANGE = 3;
+}
+
+enum PlatformSendLevel {
+  PLATFORM_SEND_LEVEL_UNSPECIFIED = 0;
+  PLATFORM_SEND_LEVEL_SELF = 1;
+  PLATFORM_SEND_LEVEL_OTHERS = 2;
+  PLATFORM_SEND_LEVEL_ALL = 3;
+}
+
+enum EventCategory {
+  EVENT_CATEGORY_UNSPECIFIED = 0;
+  EVENT_CATEGORY_LOG = 1;
+  EVENT_CATEGORY_WARNING = 2;
+  EVENT_CATEGORY_ERROR = 3;
+  EVENT_CATEGORY_SYSTEM = 4;
+  EVENT_CATEGORY_USER_MESSAGE = 5;
+}
+
+// ==========================================
+// CORE DATA STRUCTURES
+// ==========================================
+
+message AuthNew {
+  /*expected behavior: 
+   * unauthed:sever the conenction immedately
+   * authed: if engine: do nothing. if module: update to new auth
+   * */
+  string new_auth = 1;
+}
+
+message AuthVerify {
+  /* 
+   * expected behavior: 
+   * unauthed: if auth is valid, handle
+   * authed: if module: do nothing; if engine: check if auth is valid and if so continue. if  not valid sever connection
+   */
+  string cur_auth = 1;
+}
+
+message Ban {
+  /* 
+   * expected behavior: 
+   * unauthed: sever connection immediately
+   * authed: flag the user as banned if user has perms (ie: admin/owner)
+   */
+  string commender_uuid7 = 1;
+  string commendee_uuid7 = 2;
+  bool unbanned = 3;
+  string reason = 4;
+  string raw_message = 5;
+  repeated string appeals = 6;
+}
+
+message Flag {
+  /* 
+   * expected behavior: 
+   * unauthed: sever connection immediately
+   * authed: do nothing
+   */
+  string flag_name = 1;
+  string flag_description = 2;
+  FlagLimitType limiting_type = 3;
+  float min_val = 4;
+  float max_val = 5;
+  repeated string options = 6;
+}
+
+message Command {
+  /* 
+   * expected behavior: 
+   * unauthed: sever connection immediately
+   * authed: do nothing
+   */
+  string command_name = 1;
+  string command_flag = 2;
+  string command_description = 3;
+  repeated Flag command_flags = 4;
+}
+
+message Commands {
+  /* 
+   * expected behavior: 
+   * unauthed: sever connection immediately
+   * authed: add commands to the help registry
+   */
+  repeated Command commands = 1;
+}
+
+message Commendation {
+  /* 
+   * expected behavior: 
+   * unauthed: sever connection immediately
+   * authed: add commendment to the users profile
+   */
+  string commender_uuid7 = 1;
+  string commendee_uuid7 = 2;
+  string raw_message = 3;
+  string reason = 4;
+}
+
+message Reprimand {
+  /* 
+   * expected behavior: 
+   * unauthed: sever connection immediately
+   * authed: add reprimand to user profile
+   */
+  string commender_uuid7 = 1;
+  string commendee_uuid7 = 2;
+  string raw_message = 3;
+  string reason = 4;
+}
+
+message UserStylingTemplate {
+  /* 
+   * expected behavior: 
+   * unauthed: sever connection immediately
+   * authed: update the users  styling
+   */
+   map<string, string> css_properties = 1;
+}
+
+message UserData {
+  /* 
+   * expected behavior: 
+   * unauthed: sever connection immediately
+   * authed: do nothing (should be always wrapped)
+   */
+  string uuid = 1;
+  string username = 2;
+  bool is_sponsor = 3;
+  bool is_moderator = 4;
+  bool is_admin = 5;
+  bool is_owner = 6;
+  repeated Ban bans = 7;
+  repeated Commendation commendations = 8;
+  UserStylingTemplate styling = 9;
+  map<string, string> platform_ids = 10; 
+}
+
+// ==========================================
+// SYSTEM & CONNECTION STRUCTURES
+// ==========================================
+
+message ConnectionRequest {
+  /* 
+   * expected behavior: 
+   * unauthed: validate values, if good provide auth token
+   * authed: do nothing
+   */
+  int32 pin = 1;
+  ProcessPosition process_position = 2; 
+  uint32 priority = 3; 
+  string module_instance_uuid7 = 4;
+}
+
+message ConnectionRequestReturn {
+  /* 
+   * expected behavior: 
+   * unauthed: sever connection immediately
+   * authed: server: do nothing. module: update connection credentials and use moving forward
+   */
+  uint32 new_port = 1; 
+  string module_instance_uuid7 = 2;
+}
+
+message Err {
+  /* 
+   * expected behavior: 
+   * unauthed: sever connection immediately
+   * authed: module: handle liberally. engine: log the error into the timeline database, skip return value from module and pass to next module
+   */
+  string log = 1;
+  bytes blob = 2;
+  string trace = 3;
+}
+
+message Log {
+  /* 
+   * expected behavior: 
+   * unauthed: sever connection immediately
+   * authed: module: handle liberally. engine: add to timeline then if iexpecting message return, ignore result and carry forth. other just scilently log
+   */
+  string log = 1;
+  bytes blob = 2;
+}
+
+message Shutdown {
+  /* 
+   * expected behavior: 
+   * unauthed: sever connection immediately
+   * authed: module: shut self down. engine: do nothing
+   */
+  string reason = 1;
+}
+
+message SendToPlatforms {
+  /* 
+   * expected behavior: 
+   * unauthed: sever connection immediately
+   * authed: checked if module has been given the perms to do this, if an adapter-module: send message to platform. if engine: disbatch to adapters.
+   * The engine verifies the actor (the human who triggered the send) against the
+   * user database before routing, and logs who sent it to the timeline database.
+   */
+  string msg = 1;
+  PlatformSendLevel level = 2;
+  string module_uuid7 = 3;
+  string pid = 4;
+  string platform = 5;   // target platform ("twitch" | "kick" | "youtube" | "all")
+  string actor_platform = 6; // identity of the human who triggered the send
+  string actor_handle = 7;   // platform handle of that actor
+  string actor_uuid7 = 8;    // user DB uuid7 of that actor (when known)
+}
+
+// ==========================================
+// PIPELINE ACK & DATABASE
+// ==========================================
+
+message MessageAck {
+  /* 
+   * expected behavior: 
+   * unauthed: sever connection immediately
+   * authed: engine: mark module as acked for the given message UUID7, remove from pending acks
+   */
+  string message_uuid7 = 1;
+  // reserved for future extension (status codes, progress, etc.)
+}
+
+message DatabaseQuery {
+  /* 
+   * expected behavior: 
+   * unauthed: sever connection immediately
+   * authed: engine: execute query against the database and return results
+   */
+  string query_id = 1;           // unique ID for this query, used to match response
+  string sql = 2;               // SQL query to execute (read-only)
+  repeated string params = 3;   // query parameters as strings
+}
+
+message DatabaseQueryResult {
+  /* 
+   * expected behavior: 
+   * unauthed: sever connection immediately
+   * authed: module: handle query results
+   */
+  string query_id = 1;           // matches the query_id from DatabaseQuery
+  bool success = 2;             // true if query succeeded
+  string error = 3;             // error message if failed
+  bytes result_blob = 4;        // serialized result data (JSON)
+}
+
+// ==========================================
+// MODULE CONTROL
+// ==========================================
+
+enum ModuleControlAction {
+  MODULE_CONTROL_ACTION_UNSPECIFIED = 0;
+  MODULE_CONTROL_ACTION_START = 1;
+  MODULE_CONTROL_ACTION_STOP = 2;
+  MODULE_CONTROL_ACTION_DELETE = 3;
+  MODULE_CONTROL_ACTION_SET_AUTOSTART = 4;
+}
+
+message ModuleControl {
+  /* 
+   * expected behavior: 
+   * unauthed: sever connection immediately
+   * authed: engine: start/stop/delete a module or toggle its autostart flag
+   */
+  ModuleControlAction action = 1;
+  string module_name = 2;
+  bool autostart = 3;   // used only by SET_AUTOSTART
+}
+
+message ModuleControlResult {
+  /* 
+   * expected behavior: 
+   * unauthed: sever connection immediately
+   * authed: module: display result of the control action
+   */
+  bool success = 1;
+  string error = 2;
+  string message = 3;
+}
+
+// ==========================================
+// PROMPTS (engine/UI -> user confirmations)
+// ==========================================
+
+// What kind of answer a Prompt expects. The UI picks its input widget and
+// handling from this; UNSPECIFIED falls back to the legacy behavior
+// (input_label empty -> yes/no, non-empty -> free text).
+enum PromptType {
+  PROMPT_TYPE_UNSPECIFIED = 0;
+  PROMPT_TYPE_BOOLEAN = 1;      // yes/no answer (y / n keys)
+  PROMPT_TYPE_STRING = 2;       // free text: strings, numbers, anything typed/pasted
+  PROMPT_TYPE_CREDENTIAL = 3;   // like STRING, but the UI must MASK the input
+                                // (sensor it) so secrets (API keys, tokens) are
+                                // never shown on screen; the plaintext still
+                                // travels in PromptResponse.reason
+}
+
+message Prompt {
+  /* 
+   * expected behavior:
+   * unauthed: sever connection immediately
+   * authed: module (e.g. the TUI): display the prompt to the user and send a
+   * PromptResponse back with the same prompt_id_uuid7. engine: forward the
+   * prompt to connected modules so the user can be asked.
+   */
+  string prompt_id_uuid7 = 1; // correlation id for the PromptResponse
+  string prompt = 2;          // generic title, e.g. "DO YOU WANT TO DO ACTION?"
+  string details = 3;         // expounding on what the action is
+  string yes_dialog = 4;      // label for the confirm action, e.g. "Allow"
+  string no_dialog = 5;       // label for the deny action, e.g. "Deny"
+  uint32 timeout = 6;         // seconds the user has to respond
+  string origin = 7;          // who is asking (module name, or "engine")
+  string origin_uuid7 = 8;    // optional uuid7 of the origin (e.g. connecting module)
+  string instructions = 9;    // context / what the user should do / why they're being asked
+  string link = 10;           // URL to open for the prompt's subject (clickable in the UI)
+  string input_label = 11;    // label for the free-text input field (STRING/CREDENTIAL)
+  PromptType prompt_type = 12; // what kind of answer is expected (see enum above)
+}
+
+message PromptResponse {
+  /* 
+   * expected behavior:
+   * unauthed: sever connection immediately
+   * authed: module: send back after the user answers a Prompt. engine: route
+   * the response to whoever is waiting on the prompt_id_uuid7.
+   */
+  string prompt_id_uuid7 = 1;
+  bool accepted = 2;
+  string reason = 3;
+}
+
+message AuditFlag {
+  /* 
+   * expected behavior:
+   * unauthed: sever connection immediately
+   * authed: engine: mark the referenced timeline message as held for audit
+   * (pipeline_status='audit'); it is NOT shown or counted until a moderator
+   * reviews it and it is released (resubmitted as normal) or rejected.
+   */
+  string message_uuid7 = 1; // the timeline event to hold for audit
+  string reason = 2;        // why it's being flagged (e.g. language)
+  string origin = 3;        // the module that flagged it
+}
+
+// ==========================================
+// MESSAGE PIPELINE (Refactored for DRY code)
+// ==========================================
+
+// Core message data shared across all processing stages
+message ChatMessage {
+  /* 
+   * expected behavior: 
+   * unauthed: sever connection immediately
+   * authed: check add to pre-process queue, after it has been disbatched to each preprocess module put in "inprogress" queue, a then "postprocess" queue
+   */
+  string platform = 1;
+  bytes raw_data = 2; 
+  string raw_message = 3;
+  string user_uuid7 = 4;
+  Command command = 5;
+  UserData user_data = 6; 
+}
+
+message MessagePreProcess {
+  /* 
+   * expected behavior: 
+   * unauthed: sever connection immediately
+   * authed: do nothing
+   */
+  string message_uuid7 = 2;
+  ChatMessage raw_message = 1;
+  bytes audio = 3;      // optional audio rendered for this message (mp3/wav)
+  string audio_type = 4; // e.g. "audio/mpeg" or "audio/wav"
+}
+
+message MessageInProcess {
+  /* 
+   * expected behavior: 
+   * unauthed: sever connection immediately
+   * authed: do nothing
+   */
+  string message_uuid7 = 4;
+  ChatMessage raw_message = 1;
+  string processed_message = 2;
+  bool abandon_message = 3;
+  bytes audio = 5;      // optional audio rendered for this message (mp3/wav)
+  string audio_type = 6; // e.g. "audio/mpeg" or "audio/wav"
+}
+
+message MessagePostProcess {
+  /* 
+   * expected behavior: 
+   * unauthed: sever connection immediately
+   * authed: do nothing
+   */
+  string message_uuid7 = 3;
+  ChatMessage raw_message = 1;
+  string processed_message = 2;
+  bytes audio = 4;      // optional audio rendered for this message (mp3/wav)
+  string audio_type = 5; // e.g. "audio/mpeg" or "audio/wav"
+}
+
+// ==========================================
+// TIMELINE
+// ==========================================
+
+message TimelineEvent {
+  /* 
+   * expected behavior: 
+   * unauthed: sever connection immediately
+   * authed: engine: do nothing, module: should not expect, simply drop this UNLESS is a timeline or timelineline backup
+   * */
+  string timeline_id_uuid7 = 1; // Formerly 'i' - THIS IS THE PRIMARY KEY
+  EventCategory event_type = 2; // Formerly 't'
+  string command_flag = 3;      // Formerly 'c'
+  bytes data_blob = 4;          // Formerly 'd'
+  string error_message = 5;     // Formerly 'e'
+  string raw_flags = 6;         // Formerly 'f'
+  string message_origin = 7;    // Formerly 'o'
+  string stream_origin = 8;     // Formerly 's'
+  string raw_message = 9;       // Formerly 'r'
+  string processed_message = 10;// Formerly 'p'
+  string user_uuid7 = 11;       // Formerly 'u'
+  uint32 version = 12;          // Formerly 'v' (cannot be negative)
+}
+
+// ==========================================
+// THE ROOT CONTAINER ENVELOPE (if is not in this container, reject the message!)
+// ==========================================
+
+message Container {
+  /* 
+   * expected behavior: 
+   * unauthed: process based on other logic
+   * authed: process based on above logic
+   */
+  int32 version = 1;
+  string auth_token = 3;
+  string module_name = 4;
+  string module_instance_uuid7 = 5;
+  
+  oneof payload {
+    ConnectionRequest connection_request = 7;
+    ConnectionRequestReturn connection_request_return = 8;
+    AuthVerify auth_verify = 9;
+    AuthNew auth_new = 10;
+    Command command_payload = 11;
+    Commands commands_payload = 12;
+    MessagePreProcess message_pre_process = 13;
+    MessageInProcess message_in_process = 14;
+    MessagePostProcess message_post_process = 15;
+    TimelineEvent timeline_event = 16;
+    UserData user_data = 17;
+    Shutdown shutdown = 18;
+    Log log = 19;
+    Err err = 20;
+    SendToPlatforms send_to_platforms = 21;
+    MessageAck message_ack = 22;
+    DatabaseQuery database_query = 23;
+    DatabaseQueryResult database_query_result = 24;
+    ModuleControl module_control = 25;
+    ModuleControlResult module_control_result = 26;
+    Prompt prompt = 27;
+    PromptResponse prompt_response = 28;
+    AuditFlag audit_flag = 29;
+  }
+}

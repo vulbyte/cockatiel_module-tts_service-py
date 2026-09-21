@@ -7,30 +7,15 @@ import os
 import sys
 from pathlib import Path
 
-# 1. Automatically locate the Cockatiel root and register the lib-cockatiel folder
-current_dir = Path(__file__).resolve().parent
-cockatiel_root = current_dir.parent.parent  # Resolves to /Users/insert/Cockatiel/
-
-# The python client lives in the engine's shared lib directory.
-lib_path = cockatiel_root / "cockatiel_engine-rs" / "cockatiel_lib" / "python"
-if str(lib_path) not in sys.path:
-    sys.path.insert(0, str(lib_path))
-
-# 2. Dynamically hunt down the .proto file ANYWHERE inside the Cockatiel root
-proto_file = None
-for file_path in cockatiel_root.rglob("cockatiel_protobuf.proto"):
-    proto_file = file_path
-    break  # Grab the first match we find
-
-if proto_file and proto_file.exists():
-    os.environ["COCKATIEL_PROTO_PATH"] = str(proto_file)
-else:
-    raise FileNotFoundError(
-        f"CRITICAL: Could not find 'cockatiel_protobuf.proto' anywhere in {cockatiel_root}!"
-    )
+# 1. The python client is vendored alongside this module (self-contained; the
+# module no longer reaches into the engine's source tree). The vendored proto
+# is resolved by the client next to its own file.
+import os
+import sys
+from pathlib import Path
 
 # Now import safely
-from lib_cockatiel import CockatielClient, pb
+from cockatiel_client import CockatielClient, pb
 
 import argparse
 import asyncio
