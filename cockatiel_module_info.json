@@ -1,14 +1,12 @@
 {
-    "name": "tts-service",    
-    "description": "takes in a MesasgePostProcess object, and it then returns a blob with either an mp3 or wav",
-    "version": "0.1.0",
-    "capabilities": "postprocess",    
-    "root_file" = "./tts_service.py",
-    "launch_command" = "python3",    
-    "command_flags" = [
-	"-enable-optimization",
-	"--with-lto",
-	"--with-computed-gotos"
-    ],
-    "autostart": true
+  "name": "tts-service",
+  "description": "takes in a MesasgePostProcess object, and it then returns a blob with either an mp3 or wav",
+  "version": "0.1.0",
+  "capabilities": "postprocess",
+  "root_file": "./tts_service.py",
+  "launch_command": "python3",
+  "command_flags": [
+    "./tts_service.py"
+  ],
+  "autostart": true
 }

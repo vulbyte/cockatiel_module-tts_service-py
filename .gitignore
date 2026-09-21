@@ -221,3 +221,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml/clips/*
+
+# Runtime config — contains secrets (tokens/oauth). Never commit.
+config.json
+.env

@@ -6,13 +6,13 @@ Cockatiel TTS Module Entrypoint & Service Integration
 import os
 import sys
 from pathlib import Path
-from lib_cockatiel import CockatielClient, pb
 
 # 1. Automatically locate the Cockatiel root and register the lib-cockatiel folder
 current_dir = Path(__file__).resolve().parent
 cockatiel_root = current_dir.parent.parent  # Resolves to /Users/insert/Cockatiel/
 
-lib_path = cockatiel_root / "lib-cockatiel" / "python"
+# The python client lives in the engine's shared lib directory.
+lib_path = cockatiel_root / "cockatiel_engine-rs" / "cockatiel_lib" / "python"
 if str(lib_path) not in sys.path:
     sys.path.insert(0, str(lib_path))
 
@@ -30,12 +30,13 @@ else:
     )
 
 # Now import safely
-from lib_cockatiel import CockatielClient
+from lib_cockatiel import CockatielClient, pb
 
 import argparse
 import asyncio
 import json
 import logging
+import math
 
 from worker_manager import WorkerManager
 
@@ -63,8 +64,27 @@ def parse_arguments():
     parser.add_argument("-p", "--port", type=int, help="Engine WebSocket port")
     parser.add_argument("--model", type=str, help="Default TTS worker model name")
     parser.add_argument("--test", type=str, help="Test TTS synthesis locally with a given message without connecting to Cockatiel")
-    parser.add_argument("-n", "--new", action="store_true", help="Reset configuration and run setup wizard")
+    parser.add_argument("-n", "--new", action="store_true", help="Reset configuration and regenerate defaults on next start")
+    parser.add_argument("--pin", type=str, help="Engine pairing PIN (accepted for CLI compatibility; config file takes precedence)")
+    parser.add_argument("--name", type=str, help="Module name override")
     return parser.parse_args()
+
+
+def load_env_file(path: str):
+    """Load a KEY=VALUE `.env` file into the environment (real env wins)."""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                key = key.strip()
+                value = value.strip().strip('"')
+                if key and key not in os.environ:
+                    os.environ[key] = value
+    except OSError:
+        pass
 
 
 def load_or_setup_config(args) -> dict:
@@ -83,24 +103,19 @@ def load_or_setup_config(args) -> dict:
             config = {}
 
     if not config:
-        print("\n" + "=" * 66)
-        print("            Cockatiel TTS Module - Setup Wizard              ")
-        print("=" * 66 + "\n")
-        
-        ip_in = input("    > Enter Cockatiel Engine IP [Default: 127.0.0.1]: ").strip()
-        port_in = input("    > Enter Cockatiel Engine port [Default: 9734]: ").strip()
-        pin_in = input("    > Enter Engine Pairing PIN: ").strip()
-        model_in = input("    > Enter Default TTS Model (e.g. mms, speecht5) [Default: mms]: ").strip()
-
+        logger.warning(
+            "No config.json found. Writing default config "
+            "(engine 127.0.0.1:9734). Address is overridden by --ip/--port/--pin."
+        )
         config = {
-            "engine_ip": ip_in if ip_in else "127.0.0.1",
-            "engine_port": int(port_in) if port_in.isdigit() else 9734,
-            "pairing_pin": int(pin_in) if pin_in.isdigit() else 0,
-            "model": model_in if model_in else "mms"
+            "engine_ip": "127.0.0.1",
+            "engine_port": 9734,
+            "model": "mms",
         }
         CONFIG_PATH.write_text(json.dumps(config, indent=2))
-        print(f"\n[Setup Complete]: Saved configuration to {CONFIG_PATH}\n")
 
+    # Settings only — the pairing PIN is a secret and lives in the
+    # environment (COCKATIEL_PIN / --pin), never in config.json.
     if args.ip:
         config["engine_ip"] = args.ip
     if args.port:
@@ -108,7 +123,37 @@ def load_or_setup_config(args) -> dict:
     if args.model:
         config["model"] = args.model
 
+    config.setdefault("volume", 0.4)
+    config.setdefault("play_locally", False)
+
     return config
+
+
+def play_audio(path: str, volume: float = 1.0):
+    """Play a rendered audio file at the given volume (0.0–1.0) using pydub + simpleaudio."""
+    try:
+        from pydub import AudioSegment
+        import simpleaudio as sa
+
+        segment = AudioSegment.from_file(path)
+        if volume < 0.0:
+            volume = 0.0
+        if volume > 1.0:
+            volume = 1.0
+        # Apply volume as a dB change relative to full scale.
+        db = 20.0 * math.log10(volume) if volume > 0.0 else -120.0
+        segment = segment.apply_gain(db)
+        play_obj = sa.play_buffer(
+            segment.raw_data,
+            num_channels=segment.channels,
+            bytes_per_sample=segment.sample_width,
+            sample_rate=segment.frame_rate,
+        )
+        play_obj.wait_done()
+    except ImportError as e:
+        logger.warning("Playback disabled (missing pydub/simpleaudio): %s", e)
+    except Exception as e:
+        logger.error("Playback failed: %s", e)
 
 
 async def main():
@@ -154,64 +199,71 @@ async def main():
 
     # Normal Cockatiel Engine connection loop
     logger.info("TTS Service active using model worker: '%s'", active_model)
+
+    # Modern config pattern: settings in config.json, secrets in .env / env.
+    load_env_file(".env")
+    engine_ip = config.get("engine_ip", "127.0.0.1")
+    engine_port = int(config.get("engine_port", 9734))
+    pairing_pin = int(os.environ.get("COCKATIEL_PIN") or args.pin or 0)
+    module_name = args.name or "tts-service"
+
     client = await (
-        CockatielClient.connect("tts-module")
-        .endpoint(config["engine_ip"], config["engine_port"])
-        .pin(config["pairing_pin"])
+        CockatielClient.connect(module_name)
+        .endpoint(engine_ip, engine_port)
+        .pin(pairing_pin)
         .position("postprocess")
         .connect()
     )
+    logger.info("TTS Service connected as '%s' (postprocess).", module_name)
 
-    # 1. Connect to Cockatiel Engine
-    logger.info("TTS Service active using model worker: '%s'", active_model)
-    client = await (
-        CockatielClient.connect("tts-module")
-        .endpoint(config["engine_ip"], config["engine_port"])
-        .pin(config["pairing_pin"])
-        .position("postprocess")
-        .connect()
-    )
-
-    # 2. Advertise Capabilities to the Engine
-    tts_command = pb.Command(
-        command_name="Text to Speech",
-        command_flag="tts",
-        command_description="Converts text to spoken audio using AI models.",
-    )
-    
-    # Send the available voices dynamically based on the local workers
-    tts_command.command_flags.append(pb.Flag(
-        flag_name="voice",
-        flag_description="Select the TTS voice model",
-        limiting_type="options",
-        options=available
-    ))
-
-    capabilities = pb.Commands(commands=[tts_command])
-    await client.send("capabilities", capabilities)
-    logger.info("Advertised module capabilities to Cockatiel engine.")
-
+    # Serialize synthesis: the local model isn't safe for concurrent inference,
+    # and handlers now run as background tasks so probes are never blocked.
+    synthesis_lock = asyncio.Semaphore(1)
 
     @client.on("message_post_process")
     async def handle_post_process(msg, container):
-        text_to_speak = getattr(msg, "processed_message", "") or getattr(msg, "raw_message", "")
+        text_to_speak = msg.processed_message or ""
+        if not text_to_speak.strip():
+            if msg.raw_message is not None and msg.raw_message.raw_message:
+                text_to_speak = msg.raw_message.raw_message
         if not text_to_speak.strip():
             return
 
         logger.info("[TTS Engine] Rendering speech for message: '%s'", text_to_speak)
         safe_name = get_safe_filename(text_to_speak)
-        output_path = CLIPS_DIR / f"{safe_name}.mp3"
+        output_path = CLIPS_DIR / f"{safe_name}_{msg.message_uuid7[:8]}.mp3"
 
         try:
             loop = asyncio.get_running_loop()
-            await loop.run_in_executor(
-                None, 
-                manager.synthesize, 
-                active_model, 
-                text_to_speak, 
-                str(output_path)
+            async with synthesis_lock:
+                await loop.run_in_executor(
+                    None,
+                    manager.synthesize,
+                    active_model,
+                    text_to_speak,
+                    str(output_path),
+                )
+            audio_bytes = output_path.read_bytes()
+            logger.info(
+                "[TTS Engine] Success! Rendered %d bytes for %s",
+                len(audio_bytes),
+                msg.message_uuid7,
             )
-            logger.info("[TTS Engine] Success! Rendered audio saved to: %s", output_path.resolve())
+
+            # Return the audio on the same message so it's persisted to the
+            # timeline (displays retrieve + play it). This also acks the stage.
+            reply = pb.MessagePostProcess(
+                message_uuid7=msg.message_uuid7,
+                processed_message=text_to_speak,
+            )
+            reply.audio = audio_bytes
+            reply.audio_type = "audio/mpeg"
+            await client.send("message_post_process", reply)
+
+            # Optional local playback for standalone/no-display setups.
+            if config.get("play_locally", False):
+                volume = float(config.get("volume", 0.4))
+                await loop.run_in_executor(None, play_audio, str(output_path), volume)
         except Exception as e:
             logger.error("[TTS Engine] Failed to synthesize speech: %s", e)
 
