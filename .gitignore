@@ -225,3 +225,6 @@ __marimo__/
 # Runtime config — contains secrets (tokens/oauth). Never commit.
 config.json
 .env
+
+# Generated protobuf cache
+.cockatiel_pb2_cache/
