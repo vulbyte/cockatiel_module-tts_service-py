@@ -9,8 +9,8 @@ from pydub import AudioSegment
 from transformers import pipeline
 
 
-def load():
-    return pipeline("text-to-speech", model="facebook/mms-tts-eng")
+def load(model=None):
+    return pipeline("text-to-speech", model=model or "facebook/mms-tts-eng")
 
 
 def synthesize(model, message: str, output_path: str) -> None:

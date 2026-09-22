@@ -23,15 +23,16 @@ if "qwen3_tts" not in CONFIG_MAPPING:
     CONFIG_MAPPING.register("qwen3_tts", AutoConfig)
 
 
-def load():
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, trust_remote_code=True)
-    model = AutoModel.from_pretrained(
-        MODEL_ID,
+def load(model=None):
+    model_id = model or MODEL_ID
+    tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+    model_obj = AutoModel.from_pretrained(
+        model_id,
         trust_remote_code=True,
         torch_dtype=torch.float16,
         device_map="auto",
     )
-    return tokenizer, model
+    return tokenizer, model_obj
 
 
 def synthesize(model, message: str, output_path: str) -> None:

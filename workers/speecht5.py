@@ -20,9 +20,9 @@ SPEAKER_EMBEDDINGS_DATASET = "Matthijs/cmu-arctic-xvectors"
 SAMPLE_RATE = 16000  # SpeechT5's native output rate
 
 
-def load():
-    processor = SpeechT5Processor.from_pretrained(MODEL_ID)
-    model = SpeechT5ForTextToSpeech.from_pretrained(MODEL_ID)
+def load(model=None):
+    processor = SpeechT5Processor.from_pretrained(model or MODEL_ID)
+    model_obj = SpeechT5ForTextToSpeech.from_pretrained(model or MODEL_ID)
     vocoder = SpeechT5HifiGan.from_pretrained(VOCODER_ID)
 
     # A fixed speaker voice from the standard CMU ARCTIC embeddings set.
@@ -30,7 +30,7 @@ def load():
     embeddings_dataset = load_dataset(SPEAKER_EMBEDDINGS_DATASET, split="validation")
     speaker_embeddings = torch.tensor(embeddings_dataset[7306]["xvector"]).unsqueeze(0)
 
-    return processor, model, vocoder, speaker_embeddings
+    return processor, model_obj, vocoder, speaker_embeddings
 
 
 def synthesize(model, message: str, output_path: str) -> None:

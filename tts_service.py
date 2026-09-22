@@ -110,6 +110,11 @@ def load_or_setup_config(args) -> dict:
 
     config.setdefault("volume", 0.4)
     config.setdefault("play_locally", False)
+    # Optional per-worker model override: an HF model id OR a local model dir,
+    # passed to the active worker's load(model=...). Setting stays in config.
+    config.setdefault("model_source", "")
+    # Persist so the new setting always exists in config.json.
+    CONFIG_PATH.write_text(json.dumps(config, indent=2))
 
     return config
 
@@ -175,7 +180,8 @@ async def main():
                 manager.synthesize,
                 active_model,
                 args.test,
-                str(output_path)
+                str(output_path),
+                config.get("model_source", "") or "",
             )
             logger.info("Test synthesis success! Audio saved to: %s", output_path.resolve())
         except Exception as e:
@@ -218,39 +224,69 @@ async def main():
         safe_name = get_safe_filename(text_to_speak)
         output_path = CLIPS_DIR / f"{safe_name}_{msg.message_uuid7[:8]}.mp3"
 
-        try:
-            loop = asyncio.get_running_loop()
-            async with synthesis_lock:
-                await loop.run_in_executor(
-                    None,
-                    manager.synthesize,
-                    active_model,
-                    text_to_speak,
-                    str(output_path),
+        model_source = config.get("model_source", "") or None
+        # Fallback order: the configured worker first, then every other
+        # available worker. A worker that can't render (missing model, bad
+        # source, runtime error) is skipped, not fatal.
+        candidates = [active_model] + [
+            w for w in available if w != active_model
+        ]
+
+        audio_bytes = b""
+        rendered_by = None
+        for worker in candidates:
+            try:
+                loop = asyncio.get_running_loop()
+                async with synthesis_lock:
+                    await loop.run_in_executor(
+                        None,
+                        manager.synthesize,
+                        worker,
+                        text_to_speak,
+                        str(output_path),
+                        model_source or "",
+                    )
+                audio_bytes = output_path.read_bytes()
+                rendered_by = worker
+                break
+            except Exception as e:
+                logger.error(
+                    "[TTS Engine] Worker '%s' failed to render: %s",
+                    worker,
+                    e,
                 )
-            audio_bytes = output_path.read_bytes()
-            logger.info(
-                "[TTS Engine] Success! Rendered %d bytes for %s",
-                len(audio_bytes),
+                continue
+
+        if rendered_by is None:
+            logger.error(
+                "[TTS Engine] All workers failed for %s — replying with no "
+                "audio so the message completes instead of hanging.",
                 msg.message_uuid7,
             )
 
-            # Return the audio on the same message so it's persisted to the
-            # timeline (displays retrieve + play it). This also acks the stage.
-            reply = pb.MessagePostProcess(
-                message_uuid7=msg.message_uuid7,
-                processed_message=text_to_speak,
-            )
+        logger.info(
+            "[TTS Engine] Rendered %d bytes via '%s' for %s",
+            len(audio_bytes),
+            rendered_by or "(none)",
+            msg.message_uuid7,
+        )
+
+        # Return the audio (or empty audio when everything failed) on the same
+        # message so it's persisted to the timeline and the stage acks. This
+        # also acks the stage even in the failure case.
+        reply = pb.MessagePostProcess(
+            message_uuid7=msg.message_uuid7,
+            processed_message=text_to_speak,
+        )
+        if audio_bytes:
             reply.audio = audio_bytes
             reply.audio_type = "audio/mpeg"
-            await client.send("message_post_process", reply)
+        await client.send("message_post_process", reply)
 
-            # Optional local playback for standalone/no-display setups.
-            if config.get("play_locally", False):
-                volume = float(config.get("volume", 0.4))
-                await loop.run_in_executor(None, play_audio, str(output_path), volume)
-        except Exception as e:
-            logger.error("[TTS Engine] Failed to synthesize speech: %s", e)
+        # Optional local playback for standalone/no-display setups.
+        if config.get("play_locally", False):
+            volume = float(config.get("volume", 0.4))
+            await loop.run_in_executor(None, play_audio, str(output_path), volume)
 
     logger.info("Listening for incoming Cockatiel engine stream payloads...")
     await client.listen()

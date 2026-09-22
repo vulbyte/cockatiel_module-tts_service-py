@@ -83,26 +83,29 @@ class WorkerManager:
         self._modules[name] = module
         return module
 
-    def _get_model(self, name: str) -> Any:
-        if name in self._loaded_models:
-            return self._loaded_models[name]
+    def _get_model(self, name: str, model_source: str = "") -> Any:
+        # The model cache is keyed by worker + source so a custom HF id / local
+        # path switches cleanly instead of reusing a stale cached model.
+        key = f"{name}|{model_source}" if model_source else name
+        if key in self._loaded_models:
+            return self._loaded_models[key]
 
         with self._load_lock:
             # Another thread may have finished loading while we waited.
-            if name in self._loaded_models:
-                return self._loaded_models[name]
+            if key in self._loaded_models:
+                return self._loaded_models[key]
 
             module = self._get_module(name)
             logger.info("Loading worker model '%s' (first use)...", name)
-            model = module.load()
-            self._loaded_models[name] = model
+            model = module.load(model_source or None)
+            self._loaded_models[key] = model
             logger.info("Worker model '%s' loaded.", name)
             return model
 
-    def synthesize(self, name: str, message: str, output_path: str) -> None:
+    def synthesize(self, name: str, message: str, output_path: str, model_source: str = "") -> None:
         """Blocking call -- run this in a thread/executor from async code."""
         module = self._get_module(name)
-        model = self._get_model(name)
+        model = self._get_model(name, model_source)
         module.synthesize(model, message, output_path)
 
     def unload(self, name: str) -> None:

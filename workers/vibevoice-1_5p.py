@@ -8,9 +8,9 @@ from pydub import AudioSegment
 from transformers import pipeline
 
 
-def load():
+def load(model=None):
     device = 0 if torch.cuda.is_available() else -1
-    return pipeline(task="text-to-speech", model="microsoft/VibeVoice-1.5B", device=device)
+    return pipeline(task="text-to-speech", model=model or "microsoft/VibeVoice-1.5B", device=device)
 
 
 def synthesize(model, message: str, output_path: str) -> None:
