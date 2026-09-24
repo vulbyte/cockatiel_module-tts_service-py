@@ -14,6 +14,7 @@ import asyncio
 import importlib
 import logging
 import os
+import ssl
 import sys
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, Optional, Union
@@ -98,10 +99,19 @@ class CockatielClientBuilder:
         return self
 
     async def connect(self) -> "CockatielClient":
-        engine_ws_url = f"ws://{self._ip}:{self._port}"
+        # WSS when the supervisor points us at the engine's self-signed cert
+        # (COCKATIEL_TLS_CERT) — the engine rejects plain ws://. The cert is
+        # loaded as the trust root so the self-signed cert is accepted (pinned).
+        tls_cert = os.environ.get("COCKATIEL_TLS_CERT", "").strip()
+        scheme = "wss" if tls_cert else "ws"
+        engine_ws_url = f"{scheme}://{self._ip}:{self._port}"
         logger.info("Connecting to Cockatiel Engine at %s...", engine_ws_url)
 
-        ws = await websockets.connect(engine_ws_url)
+        ws_kwargs = {}
+        if tls_cert:
+            ctx = ssl.create_default_context(cafile=tls_cert)
+            ws_kwargs["ssl"] = ctx
+        ws = await websockets.connect(engine_ws_url, **ws_kwargs)
         logger.info("Connected to WebSocket! Sending authentication handshake...")
 
         pos_enum = _PROCESS_POSITION.get(self._process_position.lower(), 4)
